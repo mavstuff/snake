@@ -20,31 +20,29 @@ SERVER_PORT = 5555
 
 # Colors
 BLACK = (0, 0, 0)
-GREEN = (0, 255, 0)
 RED = (255, 0, 0)
 WHITE = (255, 255, 255)
-DARK_GREEN = (0, 200, 0)
 
 # Set up the display
 screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
 pygame.display.set_caption('Snake Game - Client')
 clock = pygame.time.Clock()
 font = pygame.font.Font(None, 36)
+small_font = pygame.font.Font(None, 24)
 
 class GameClient:
     def __init__(self):
         self.socket = None
         self.connected = False
+        self.player_id = None
+        self.my_color = None
         self.game_state = {
-            'snake_position': [],
-            'snake_size': 0,
-            'food_position': (0, 0),
-            'score': 0,
-            'game_over': False,
-            'game_timer': 0.0,
-            'food_timer': 0.0
+            'players': [],
+            'foods': [],
+            'your_player_id': None
         }
         self.lock = threading.Lock()
+        self.init_received = False
 
     def connect(self):
         try:
@@ -52,6 +50,18 @@ class GameClient:
             self.socket.connect((SERVER_HOST, SERVER_PORT))
             self.connected = True
             print(f"Connected to server at {SERVER_HOST}:{SERVER_PORT}")
+            
+            # Receive initial player info
+            try:
+                data = self.socket.recv(1024).decode('utf-8')
+                init_data = json.loads(data)
+                self.player_id = init_data.get('player_id')
+                self.my_color = tuple(init_data.get('color'))
+                self.init_received = True
+                print(f"Assigned Player ID: {self.player_id}, Color: {self.my_color}")
+            except Exception as e:
+                print(f"Error receiving initial data: {e}")
+                return False
             
             # Start receiving thread
             receive_thread = threading.Thread(target=self.receive_state, daemon=True)
@@ -75,7 +85,7 @@ class GameClient:
     def receive_state(self):
         while self.connected:
             try:
-                data = self.socket.recv(4096).decode('utf-8')
+                data = self.socket.recv(8192).decode('utf-8')
                 if not data:
                     break
 
@@ -98,42 +108,92 @@ class GameClient:
         if self.socket:
             self.socket.close()
 
-def draw_game(state):
-    screen.fill(BLACK)
-    
-    # Draw snake
-    snake_body = state.get('snake_position', [])
+def draw_snake(snake_body, color):
+    """Draw a snake with the given color"""
+    dark_color = tuple(max(0, c - 50) for c in color)  # Darker version for border
     for block in snake_body:
         x_pos = int(block[0] * CELL_SIZE)
         y_pos = int(block[1] * CELL_SIZE)
         block_rect = pygame.Rect(x_pos, y_pos, CELL_SIZE, CELL_SIZE)
-        pygame.draw.rect(screen, GREEN, block_rect)
-        pygame.draw.rect(screen, DARK_GREEN, block_rect, 2)
-    
-    # Draw food
-    food_pos = state.get('food_position', (0, 0))
-    x_pos = int(food_pos[0] * CELL_SIZE)
-    y_pos = int(food_pos[1] * CELL_SIZE)
-    food_rect = pygame.Rect(x_pos, y_pos, CELL_SIZE, CELL_SIZE)
-    pygame.draw.rect(screen, RED, food_rect)
-    
-    # Draw score and info
-    score = state.get('score', 0)
-    score_text = font.render(f'Score: {score}', True, WHITE)
-    screen.blit(score_text, (10, 10))
-    
-    game_timer = state.get('game_timer', 0.0)
-    timer_text = font.render(f'Time: {game_timer:.1f}s', True, WHITE)
-    screen.blit(timer_text, (10, 50))
+        pygame.draw.rect(screen, color, block_rect)
+        pygame.draw.rect(screen, dark_color, block_rect, 2)
 
-def draw_game_over(state):
+def draw_game(state, my_player_id):
     screen.fill(BLACK)
-    score = state.get('score', 0)
-    game_over_text = font.render(f'Game Over! Score: {score}', True, WHITE)
+    
+    # Draw all foods
+    foods = state.get('foods', [])
+    for food_pos in foods:
+        x_pos = int(food_pos[0] * CELL_SIZE)
+        y_pos = int(food_pos[1] * CELL_SIZE)
+        food_rect = pygame.Rect(x_pos, y_pos, CELL_SIZE, CELL_SIZE)
+        pygame.draw.rect(screen, RED, food_rect)
+    
+    # Draw all snakes
+    players = state.get('players', [])
+    for player in players:
+        if player.get('game_over', False):
+            continue
+        snake_body = player.get('snake_position', [])
+        color = tuple(player.get('color', (0, 255, 0)))
+        draw_snake(snake_body, color)
+    
+    # Draw scores for all players
+    y_offset = 10
+    for i, player in enumerate(sorted(players, key=lambda p: p.get('score', 0), reverse=True)):
+        player_id = player.get('player_id', -1)
+        score = player.get('score', 0)
+        color = tuple(player.get('color', (255, 255, 255)))
+        game_over = player.get('game_over', False)
+        is_me = (player_id == my_player_id)
+        
+        # Create score text with color indicator
+        prefix = "YOU: " if is_me else f"P{player_id}: "
+        status = " (DEAD)" if game_over else ""
+        score_text = small_font.render(f"{prefix} Score: {score}{status}", True, color)
+        screen.blit(score_text, (WINDOW_WIDTH - 200, y_offset))
+        y_offset += 30
+    
+    # Draw game timer (from first player)
+    if players:
+        game_timer = players[0].get('game_timer', 0.0)
+        timer_text = font.render(f'Time: {game_timer:.1f}s', True, WHITE)
+        screen.blit(timer_text, (10, 10))
+
+def draw_game_over(state, my_player_id):
+    screen.fill(BLACK)
+    
+    # Find my player
+    players = state.get('players', [])
+    my_player = None
+    for player in players:
+        if player.get('player_id') == my_player_id:
+            my_player = player
+            break
+    
+    if my_player:
+        score = my_player.get('score', 0)
+        game_over_text = font.render(f'Game Over! Your Score: {score}', True, WHITE)
+        
+        # Show leaderboard
+        sorted_players = sorted(players, key=lambda p: p.get('score', 0), reverse=True)
+        leaderboard_text = font.render('Leaderboard:', True, WHITE)
+        screen.blit(game_over_text, (WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT/2 - 150))
+        screen.blit(leaderboard_text, (WINDOW_WIDTH/2 - 100, WINDOW_HEIGHT/2 - 100))
+        
+        y_offset = WINDOW_HEIGHT/2 - 60
+        for i, player in enumerate(sorted_players[:5]):  # Top 5
+            player_id = player.get('player_id', -1)
+            player_score = player.get('score', 0)
+            color = tuple(player.get('color', (255, 255, 255)))
+            is_me = (player_id == my_player_id)
+            prefix = "YOU" if is_me else f"Player {player_id}"
+            leader_text = small_font.render(f"{i+1}. {prefix}: {player_score}", True, color)
+            screen.blit(leader_text, (WINDOW_WIDTH/2 - 100, y_offset))
+            y_offset += 25
+    
     restart_text = font.render('Press SPACE to restart or ESC to quit', True, WHITE)
-    game_over_rect = game_over_text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2 - 50))
-    restart_rect = restart_text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2 + 50))
-    screen.blit(game_over_text, game_over_rect)
+    restart_rect = restart_text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2 + 150))
     screen.blit(restart_text, restart_rect)
 
 def draw_connection_error():
@@ -186,8 +246,16 @@ def main():
             
             if event.type == pygame.KEYDOWN:
                 state = client.get_state()
+                players = state.get('players', [])
                 
-                if state.get('game_over', False):
+                # Check if my player is game over
+                my_player = None
+                for player in players:
+                    if player.get('player_id') == client.player_id:
+                        my_player = player
+                        break
+                
+                if my_player and my_player.get('game_over', False):
                     if event.key == pygame.K_SPACE:
                         client.send_direction('RESET')
                     elif event.key == pygame.K_ESCAPE:
@@ -213,12 +281,20 @@ def main():
 
         # Get current game state
         state = client.get_state()
+        players = state.get('players', [])
+        
+        # Check if my player is game over
+        my_player = None
+        for player in players:
+            if player.get('player_id') == client.player_id:
+                my_player = player
+                break
         
         # Draw game or game over screen
-        if state.get('game_over', False):
-            draw_game_over(state)
+        if my_player and my_player.get('game_over', False):
+            draw_game_over(state, client.player_id)
         else:
-            draw_game(state)
+            draw_game(state, client.player_id)
         
         pygame.display.update()
         clock.tick(60)
