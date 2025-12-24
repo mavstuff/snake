@@ -487,6 +487,9 @@ class MultiPlayerGame:
             else:
                 # Reset timestamp if there are 0 or more than 1 human players alive
                 self.last_human_alive_time = None
+                # Auto-restart if no human players left
+                if len(human_players_alive) == 0:
+                    self.reset_all_players()
 
             self.last_update_time = current_time
 
@@ -575,7 +578,7 @@ class MultiPlayerGame:
         }
 
 class SnakeServer:
-    def __init__(self, host='localhost', port=5555, num_bots=0, bot_level=5):
+    def __init__(self, host='0.0.0.0', port=5555, num_bots=0, bot_level=5):
         self.host = host
         self.port = port
         self.game = MultiPlayerGame(num_bots=num_bots, bot_level=bot_level)
@@ -711,7 +714,10 @@ class SnakeServer:
         # Set timeout so accept() doesn't block indefinitely, allowing KeyboardInterrupt
         server_socket.settimeout(1.0)
 
-        print(f"Snake Server started on {self.host}:{self.port}")
+        if self.host == '0.0.0.0':
+            print(f"Snake Server started on all interfaces (0.0.0.0):{self.port}")
+        else:
+            print(f"Snake Server started on {self.host}:{self.port}")
         if self.game.num_bots > 0:
             print(f"Bots will start when first human player connects: {self.game.num_bots} bots at level {self.game.bot_level}")
         print("Waiting for clients... (Press Ctrl+C to stop)")
@@ -744,7 +750,7 @@ if __name__ == "__main__":
     parser.add_argument('--bots', type=int, default=0, help='Number of bot players (default: 0)')
     parser.add_argument('--bot-level', type=int, default=5, choices=range(10), 
                         metavar='[0-9]', help='Bot difficulty level 0-9 (0=most random, 9=direct to food, default: 5)')
-    parser.add_argument('--host', type=str, default='localhost', help='Server host (default: localhost)')
+    parser.add_argument('--host', type=str, default='0.0.0.0', help='Server host (default: 0.0.0.0 - all interfaces)')
     parser.add_argument('--port', type=int, default=5555, help='Server port (default: 5555)')
     
     args = parser.parse_args()

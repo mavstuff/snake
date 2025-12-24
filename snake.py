@@ -192,9 +192,8 @@ def draw_game(state, my_player_id):
         msg_rect = restart_msg.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2))
         screen.blit(restart_msg, msg_rect)
 
-def draw_game_over(state, my_player_id):
-    screen.fill(BLACK)
-    
+def draw_death_overlay(state, my_player_id):
+    """Draw overlay message for dead players on top of game field"""
     # Find my player
     players = state.get('players', [])
     my_player = None
@@ -216,38 +215,20 @@ def draw_game_over(state, my_player_id):
         }
         reason_display = reason_text_map.get(reason, reason.capitalize())
         
-        game_over_text = font.render(f'Game Over! Your Score: {score}', True, WHITE)
-        reason_display_text = font.render(f'Reason: {reason_display}', True, (255, 100, 100))
+        # Draw semi-transparent overlay background
+        overlay = pygame.Surface((WINDOW_WIDTH, 150))
+        overlay.set_alpha(200)
+        overlay.fill(BLACK)
+        screen.blit(overlay, (0, 0))
         
-        # Show leaderboard
-        sorted_players = sorted(players, key=lambda p: p.get('score', 0), reverse=True)
-        leaderboard_text = font.render('Leaderboard:', True, WHITE)
-        screen.blit(game_over_text, (WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT/2 - 180))
-        screen.blit(reason_display_text, (WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT/2 - 140))
-        screen.blit(leaderboard_text, (WINDOW_WIDTH/2 - 100, WINDOW_HEIGHT/2 - 100))
+        # Draw game over message
+        game_over_text = font.render(f'You Died! Score: {score}', True, (255, 100, 100))
+        reason_display_text = small_font.render(f'Reason: {reason_display}', True, WHITE)
+        restart_text = small_font.render('Press SPACE to restart or ESC to quit', True, WHITE)
         
-        y_offset = WINDOW_HEIGHT/2 - 60
-        for i, player in enumerate(sorted_players[:5]):  # Top 5
-            player_id = player.get('player_id', -1)
-            player_score = player.get('score', 0)
-            color = tuple(player.get('color', (255, 255, 255)))
-            letter = player.get('letter', '')
-            is_bot = player.get('is_bot', False)
-            is_me = (player_id == my_player_id)
-            if is_me:
-                prefix = "YOU"
-            elif is_bot:
-                prefix = f"BOT{player_id}"
-            else:
-                prefix = f"Player {player_id}"
-            bot_label = " [BOT]" if is_bot else ""
-            leader_text = small_font.render(f"{i+1}. {prefix} [{letter}]{bot_label}: {player_score}", True, color)
-            screen.blit(leader_text, (WINDOW_WIDTH/2 - 100, y_offset))
-            y_offset += 25
-    
-    restart_text = font.render('Press SPACE to restart or ESC to quit', True, WHITE)
-    restart_rect = restart_text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2 + 150))
-    screen.blit(restart_text, restart_rect)
+        screen.blit(game_over_text, (10, 10))
+        screen.blit(reason_display_text, (10, 50))
+        screen.blit(restart_text, (10, 80))
 
 def draw_connection_error():
     screen.fill(BLACK)
@@ -412,11 +393,12 @@ def main():
                 my_player = player
                 break
         
-        # Draw game or game over screen
+        # Always show game field, but overlay message if dead
+        draw_game(state, client.player_id)
+        
+        # Overlay message if player is dead
         if my_player and my_player.get('game_over', False):
-            draw_game_over(state, client.player_id)
-        else:
-            draw_game(state, client.player_id)
+            draw_death_overlay(state, client.player_id)
         
         pygame.display.update()
         clock.tick(60)
