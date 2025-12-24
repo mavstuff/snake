@@ -7,7 +7,7 @@ import time
 # Constants
 CELL_NUMBER_X = 40  # 800 // 20
 CELL_NUMBER_Y = 30  # 600 // 20
-UPDATE_INTERVAL = 0.5  # 150ms update interval
+UPDATE_INTERVAL = 0.15  # 150ms update interval
 
 # Available colors for snakes (RGB tuples)
 SNAKE_COLORS = [
@@ -85,9 +85,10 @@ class Food:
         return self.position
 
 class Player:
-    def __init__(self, player_id, color, start_pos=None):
+    def __init__(self, player_id, color, letter, start_pos=None):
         self.player_id = player_id
         self.color = color
+        self.letter = letter
         self.snake = Snake(start_pos)
         self.score = 0
         self.game_over = False
@@ -107,6 +108,7 @@ class Player:
         return {
             'player_id': self.player_id,
             'color': self.color,
+            'letter': self.letter,
             'snake_position': self.snake.get_position(),
             'snake_size': self.snake.get_size(),
             'score': self.score,
@@ -123,7 +125,7 @@ class MultiPlayerGame:
         self.next_player_id = 0
         self.color_index = 0
 
-    def add_player(self):
+    def add_player(self, letter):
         """Add a new player and return their ID and color"""
         player_id = self.next_player_id
         self.next_player_id += 1
@@ -141,7 +143,7 @@ class MultiPlayerGame:
         while start_pos in occupied:
             start_pos = (start_pos[0] + 1, start_pos[1])
         
-        player = Player(player_id, color, start_pos)
+        player = Player(player_id, color, letter, start_pos)
         self.players[player_id] = player
         
         # Update food count to match number of players
@@ -264,12 +266,32 @@ class SnakeServer:
         self.lock = threading.Lock()
 
     def handle_client(self, client_socket, address):
+        # Receive letter from client first
+        try:
+            data = client_socket.recv(1024).decode('utf-8')
+            if not data:
+                client_socket.close()
+                return
+            
+            message = json.loads(data)
+            letter = message.get('letter', 'A')
+            
+            # Validate letter (A-Z)
+            if not isinstance(letter, str) or len(letter) != 1 or not letter.isalpha():
+                letter = 'A'
+            letter = letter.upper()
+            
+        except Exception as e:
+            print(f"Error receiving letter from client {address}: {e}")
+            client_socket.close()
+            return
+        
         # Add player to game
         with self.lock:
-            player_id, color = self.game.add_player()
+            player_id, color = self.game.add_player(letter)
             self.clients[player_id] = (client_socket, address)
         
-        print(f"Client {player_id} connected: {address} (Color: {color})")
+        print(f"Client {player_id} connected: {address} (Color: {color}, Letter: {letter})")
         
         # Send initial player info
         try:

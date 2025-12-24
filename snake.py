@@ -36,6 +36,7 @@ class GameClient:
         self.connected = False
         self.player_id = None
         self.my_color = None
+        self.selected_letter = 'A'
         self.game_state = {
             'players': [],
             'foods': [],
@@ -44,12 +45,21 @@ class GameClient:
         self.lock = threading.Lock()
         self.init_received = False
 
-    def connect(self):
+    def connect(self, letter):
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             self.socket.connect((SERVER_HOST, SERVER_PORT))
             self.connected = True
+            self.selected_letter = letter
             print(f"Connected to server at {SERVER_HOST}:{SERVER_PORT}")
+            
+            # Send letter to server first
+            try:
+                letter_message = json.dumps({'letter': letter})
+                self.socket.sendall(letter_message.encode('utf-8'))
+            except Exception as e:
+                print(f"Error sending letter: {e}")
+                return False
             
             # Receive initial player info
             try:
@@ -58,7 +68,7 @@ class GameClient:
                 self.player_id = init_data.get('player_id')
                 self.my_color = tuple(init_data.get('color'))
                 self.init_received = True
-                print(f"Assigned Player ID: {self.player_id}, Color: {self.my_color}")
+                print(f"Assigned Player ID: {self.player_id}, Color: {self.my_color}, Letter: {letter}")
             except Exception as e:
                 print(f"Error receiving initial data: {e}")
                 return False
@@ -108,15 +118,22 @@ class GameClient:
         if self.socket:
             self.socket.close()
 
-def draw_snake(snake_body, color):
-    """Draw a snake with the given color"""
+def draw_snake(snake_body, color, letter=''):
+    """Draw a snake with the given color and letter at head"""
     dark_color = tuple(max(0, c - 50) for c in color)  # Darker version for border
-    for block in snake_body:
+    for i, block in enumerate(snake_body):
         x_pos = int(block[0] * CELL_SIZE)
         y_pos = int(block[1] * CELL_SIZE)
         block_rect = pygame.Rect(x_pos, y_pos, CELL_SIZE, CELL_SIZE)
         pygame.draw.rect(screen, color, block_rect)
         pygame.draw.rect(screen, dark_color, block_rect, 2)
+        
+        # Draw letter on head (first block)
+        if i == 0 and letter:
+            # Use white text for better visibility on colored backgrounds
+            letter_text = small_font.render(letter, True, WHITE)
+            letter_rect = letter_text.get_rect(center=(x_pos + CELL_SIZE // 2, y_pos + CELL_SIZE // 2))
+            screen.blit(letter_text, letter_rect)
 
 def draw_game(state, my_player_id):
     screen.fill(BLACK)
@@ -136,7 +153,8 @@ def draw_game(state, my_player_id):
             continue
         snake_body = player.get('snake_position', [])
         color = tuple(player.get('color', (0, 255, 0)))
-        draw_snake(snake_body, color)
+        letter = player.get('letter', '')
+        draw_snake(snake_body, color, letter)
     
     # Draw scores for all players
     y_offset = 10
@@ -146,12 +164,13 @@ def draw_game(state, my_player_id):
         color = tuple(player.get('color', (255, 255, 255)))
         game_over = player.get('game_over', False)
         is_me = (player_id == my_player_id)
+        letter = player.get('letter', '')
         
-        # Create score text with color indicator
+        # Create score text with letter indicator
         prefix = "YOU: " if is_me else f"P{player_id}: "
         status = " (DEAD)" if game_over else ""
-        score_text = small_font.render(f"{prefix} Score: {score}{status}", True, color)
-        screen.blit(score_text, (WINDOW_WIDTH - 200, y_offset))
+        score_text = small_font.render(f"{prefix}[{letter}] Score: {score}{status}", True, color)
+        screen.blit(score_text, (WINDOW_WIDTH - 220, y_offset))
         y_offset += 30
     
     # Draw game timer (from first player)
@@ -186,9 +205,10 @@ def draw_game_over(state, my_player_id):
             player_id = player.get('player_id', -1)
             player_score = player.get('score', 0)
             color = tuple(player.get('color', (255, 255, 255)))
+            letter = player.get('letter', '')
             is_me = (player_id == my_player_id)
             prefix = "YOU" if is_me else f"Player {player_id}"
-            leader_text = small_font.render(f"{i+1}. {prefix}: {player_score}", True, color)
+            leader_text = small_font.render(f"{i+1}. {prefix} [{letter}]: {player_score}", True, color)
             screen.blit(leader_text, (WINDOW_WIDTH/2 - 100, y_offset))
             y_offset += 25
     
@@ -210,10 +230,69 @@ def draw_connection_error():
     screen.blit(info_text, info_rect)
     screen.blit(quit_text, quit_rect)
 
+def draw_letter_selection():
+    """Display letter selection screen and return selected letter"""
+    selected_letter = 'A'
+    running = True
+    
+    while running:
+        screen.fill(BLACK)
+        
+        # Title
+        title_text = font.render('Select Your Letter (A-Z)', True, WHITE)
+        title_rect = title_text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2 - 150))
+        screen.blit(title_text, title_rect)
+        
+        # Current selection
+        letter_text = font.render(selected_letter, True, (0, 255, 0))
+        letter_rect = letter_text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2 - 50))
+        # Draw a box around the letter
+        box_rect = pygame.Rect(letter_rect.x - 20, letter_rect.y - 20, 80, 80)
+        pygame.draw.rect(screen, (0, 255, 0), box_rect, 3)
+        screen.blit(letter_text, letter_rect)
+        
+        # Instructions
+        inst_text = small_font.render('Press letter key to select, ENTER to confirm', True, WHITE)
+        inst_rect = inst_text.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2 + 50))
+        screen.blit(inst_text, inst_rect)
+        
+        pygame.display.update()
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return None
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    return None
+                elif event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                    running = False
+                elif event.unicode and event.unicode.isalpha():
+                    selected_letter = event.unicode.upper()
+                # Arrow keys or number keys to cycle through letters
+                elif event.key == pygame.K_UP or event.key == pygame.K_w:
+                    # Move to previous letter
+                    if selected_letter > 'A':
+                        selected_letter = chr(ord(selected_letter) - 1)
+                elif event.key == pygame.K_DOWN or event.key == pygame.K_s:
+                    # Move to next letter
+                    if selected_letter < 'Z':
+                        selected_letter = chr(ord(selected_letter) + 1)
+        
+        clock.tick(60)
+    
+    return selected_letter
+
 def main():
+    # Show letter selection screen first
+    selected_letter = draw_letter_selection()
+    if selected_letter is None:
+        pygame.quit()
+        sys.exit()
+        return
+    
     client = GameClient()
     
-    if not client.connect():
+    if not client.connect(selected_letter):
         # Show connection error screen
         running = True
         while running:
