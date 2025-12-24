@@ -165,12 +165,19 @@ def draw_game(state, my_player_id):
         game_over = player.get('game_over', False)
         is_me = (player_id == my_player_id)
         letter = player.get('letter', '')
+        is_bot = player.get('is_bot', False)
         
-        # Create score text with letter indicator
-        prefix = "YOU: " if is_me else f"P{player_id}: "
+        # Create score text with letter indicator and BOT label
+        if is_me:
+            prefix = "YOU: "
+        elif is_bot:
+            prefix = f"BOT{player_id}: "
+        else:
+            prefix = f"P{player_id}: "
         status = " (DEAD)" if game_over else ""
-        score_text = small_font.render(f"{prefix}[{letter}] Score: {score}{status}", True, color)
-        screen.blit(score_text, (WINDOW_WIDTH - 220, y_offset))
+        bot_label = " [BOT]" if is_bot else ""
+        score_text = small_font.render(f"{prefix}[{letter}]{bot_label} Score: {score}{status}", True, color)
+        screen.blit(score_text, (WINDOW_WIDTH - 350, y_offset))
         y_offset += 30
     
     # Draw game timer (from first player)
@@ -178,6 +185,12 @@ def draw_game(state, my_player_id):
         game_timer = players[0].get('game_timer', 0.0)
         timer_text = font.render(f'Time: {game_timer:.1f}s', True, WHITE)
         screen.blit(timer_text, (10, 10))
+    
+    # Draw restart message if shown (for last human player)
+    if state.get('show_restart_message', False):
+        restart_msg = font.render('Press R to restart entire game', True, (100, 255, 100))
+        msg_rect = restart_msg.get_rect(center=(WINDOW_WIDTH/2, WINDOW_HEIGHT/2))
+        screen.blit(restart_msg, msg_rect)
 
 def draw_game_over(state, my_player_id):
     screen.fill(BLACK)
@@ -192,12 +205,25 @@ def draw_game_over(state, my_player_id):
     
     if my_player:
         score = my_player.get('score', 0)
+        reason = my_player.get('game_over_reason', 'unknown')
+        
+        # Convert reason to readable text
+        reason_text_map = {
+            'wall': 'Hit Wall',
+            'self': 'Hit Self',
+            'other_player': 'Hit Another Player',
+            'unknown': 'Unknown'
+        }
+        reason_display = reason_text_map.get(reason, reason.capitalize())
+        
         game_over_text = font.render(f'Game Over! Your Score: {score}', True, WHITE)
+        reason_display_text = font.render(f'Reason: {reason_display}', True, (255, 100, 100))
         
         # Show leaderboard
         sorted_players = sorted(players, key=lambda p: p.get('score', 0), reverse=True)
         leaderboard_text = font.render('Leaderboard:', True, WHITE)
-        screen.blit(game_over_text, (WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT/2 - 150))
+        screen.blit(game_over_text, (WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT/2 - 180))
+        screen.blit(reason_display_text, (WINDOW_WIDTH/2 - 150, WINDOW_HEIGHT/2 - 140))
         screen.blit(leaderboard_text, (WINDOW_WIDTH/2 - 100, WINDOW_HEIGHT/2 - 100))
         
         y_offset = WINDOW_HEIGHT/2 - 60
@@ -206,9 +232,16 @@ def draw_game_over(state, my_player_id):
             player_score = player.get('score', 0)
             color = tuple(player.get('color', (255, 255, 255)))
             letter = player.get('letter', '')
+            is_bot = player.get('is_bot', False)
             is_me = (player_id == my_player_id)
-            prefix = "YOU" if is_me else f"Player {player_id}"
-            leader_text = small_font.render(f"{i+1}. {prefix} [{letter}]: {player_score}", True, color)
+            if is_me:
+                prefix = "YOU"
+            elif is_bot:
+                prefix = f"BOT{player_id}"
+            else:
+                prefix = f"Player {player_id}"
+            bot_label = " [BOT]" if is_bot else ""
+            leader_text = small_font.render(f"{i+1}. {prefix} [{letter}]{bot_label}: {player_score}", True, color)
             screen.blit(leader_text, (WINDOW_WIDTH/2 - 100, y_offset))
             y_offset += 25
     
@@ -334,7 +367,17 @@ def main():
                         my_player = player
                         break
                 
-                if my_player and my_player.get('game_over', False):
+                # Check if this is the last human player (for restart all)
+                human_players_alive = [
+                    p for p in players
+                    if not p.get('is_bot', False) and not p.get('game_over', False)
+                ]
+                is_last_human = (len(human_players_alive) == 1 and human_players_alive[0].get('player_id') == client.player_id) or len(human_players_alive) == 0
+                
+                # Handle 'r' key for restart all (works whether game over or not, if last human)
+                if (event.key == pygame.K_r) and is_last_human:
+                    client.send_direction('RESTART_ALL')
+                elif my_player and my_player.get('game_over', False):
                     if event.key == pygame.K_SPACE:
                         client.send_direction('RESET')
                     elif event.key == pygame.K_ESCAPE:
