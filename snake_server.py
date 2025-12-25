@@ -4,6 +4,9 @@ import threading
 import random
 import time
 import argparse
+import hashlib
+import base64
+import os
 
 # Constants
 CELL_NUMBER_X = 40  # 800 // 20
@@ -638,25 +641,83 @@ class SnakeServer:
         self.lock = threading.Lock()
         self.update_interval = update_interval
         self.udp_socket = None
+        # Cache server's snake.py hash
+        self.server_file_hash = self._calculate_server_file_hash()
+    
+    def _calculate_server_file_hash(self):
+        """Calculate hash of server's snake.py file"""
+        try:
+            if os.path.exists('snake.py'):
+                with open('snake.py', 'rb') as f:
+                    file_hash = hashlib.sha256(f.read()).hexdigest()
+                return file_hash
+            return None
+        except Exception as e:
+            print(f"Error calculating server file hash: {e}")
+            return None
 
     def handle_client(self, client_socket, address):
-        # Receive letter from client first
+        # Receive letter and file hash from client
         try:
-            data = client_socket.recv(1024).decode('utf-8')
-            if not data:
-                client_socket.close()
-                return
+            # First receive 4-byte length prefix
+            length_data = b''
+            while len(length_data) < 4:
+                chunk = client_socket.recv(4 - len(length_data))
+                if not chunk:
+                    client_socket.close()
+                    return
+                length_data += chunk
             
-            message = json.loads(data)
+            message_length = int.from_bytes(length_data, 'big')
+            
+            # Now receive the complete message based on length
+            data = b''
+            while len(data) < message_length:
+                chunk = client_socket.recv(min(1024, message_length - len(data)))
+                if not chunk:
+                    client_socket.close()
+                    return
+                data += chunk
+            
+            message = json.loads(data.decode('utf-8'))
+            
             letter = message.get('letter', 'A')
+            client_file_hash = message.get('file_hash')
             
             # Validate letter (A-Z)
             if not isinstance(letter, str) or len(letter) != 1 or not letter.isalpha():
                 letter = 'A'
             letter = letter.upper()
             
+            # Check if client's file hash matches server's
+            # Send update if: hash is None (client doesn't have file or error) OR hashes don't match
+            if (client_file_hash is None or client_file_hash != self.server_file_hash) and self.server_file_hash is not None:
+                # Hash mismatch - send file update
+                print(f"Client {address} has different snake.py hash. Sending update...")
+                try:
+                    with open('snake.py', 'rb') as f:
+                        file_content = f.read()
+                    
+                    file_content_b64 = base64.b64encode(file_content).decode('utf-8')
+                    update_message = json.dumps({
+                        'action': 'update_file',
+                        'filename': 'snake.py',
+                        'file_content': file_content_b64
+                    })
+                    message_bytes = update_message.encode('utf-8')
+                    # Send length prefix (4 bytes, big-endian) followed by message
+                    length_prefix = len(message_bytes).to_bytes(4, 'big')
+                    client_socket.sendall(length_prefix + message_bytes)
+                    client_socket.close()
+                    print(f"File update sent to client {address}. Client will restart.")
+                    return
+                except Exception as e:
+                    print(f"Error sending file update to client {address}: {e}")
+                    client_socket.close()
+                    return
+            
         except Exception as e:
-            print(f"Error receiving letter from client {address}: {e}")
+            print(f"Error receiving data from client {address}: {e}")
             client_socket.close()
             return
         
@@ -678,7 +739,10 @@ class SnakeServer:
                 'player_id': player_id,
                 'color': color
             })
-            client_socket.sendall(init_message.encode('utf-8'))
+            message_bytes = init_message.encode('utf-8')
+            # Send length prefix (4 bytes, big-endian) followed by message
+            length_prefix = len(message_bytes).to_bytes(4, 'big')
+            client_socket.sendall(length_prefix + message_bytes)
         except Exception as e:
             print(f"Error sending initial message to client {player_id}: {e}")
 

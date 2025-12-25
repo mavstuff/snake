@@ -5,6 +5,9 @@ import json
 import threading
 import argparse
 import time
+import hashlib
+import base64
+import os
 
 # Initialize Pygame
 pygame.init()
@@ -19,6 +22,16 @@ CELL_NUMBER_Y = WINDOW_HEIGHT // CELL_SIZE
 # Network settings
 UDP_DISCOVERY_PORT = 5556  # UDP port for server discovery
 DISCOVERY_TIMEOUT = 3.0  # Time to wait for server discovery (seconds)
+
+def calculate_file_hash(filename):
+    """Calculate SHA256 hash of a file"""
+    try:
+        with open(filename, 'rb') as f:
+            file_hash = hashlib.sha256(f.read()).hexdigest()
+        return file_hash
+    except Exception as e:
+        print(f"Error calculating hash for {filename}: {e}")
+        return None
 
 # Colors
 BLACK = (0, 0, 0)
@@ -105,18 +118,85 @@ class GameClient:
             self.selected_letter = letter
             print(f"Connected to server at {server_address[0]}:{server_address[1]}")
             
-            # Send letter to server first
+            # Calculate hash of local snake.py file
+            client_hash = calculate_file_hash('snake.py')
+            # If hash is None (file doesn't exist or error), still send None to server
+            # Server will send the file in that case
+            
+            # Send letter and file hash to server
             try:
-                letter_message = json.dumps({'letter': letter})
-                self.socket.sendall(letter_message.encode('utf-8'))
+                letter_message = json.dumps({
+                    'letter': letter,
+                    'file_hash': client_hash
+                })
+                message_bytes = letter_message.encode('utf-8')
+                # Send length prefix (4 bytes, big-endian) followed by message
+                length_prefix = len(message_bytes).to_bytes(4, 'big')
+                self.socket.sendall(length_prefix + message_bytes)
             except Exception as e:
                 print(f"Error sending letter: {e}")
                 return False
             
-            # Receive initial player info
+            # Receive initial response from server
             try:
-                data = self.socket.recv(1024).decode('utf-8')
-                init_data = json.loads(data)
+                # First receive 4-byte length prefix
+                length_data = b''
+                while len(length_data) < 4:
+                    chunk = self.socket.recv(4 - len(length_data))
+                    if not chunk:
+                        raise ConnectionError("Connection closed while receiving length prefix")
+                    length_data += chunk
+                
+                message_length = int.from_bytes(length_data, 'big')
+                
+                # Now receive the complete message based on length
+                data = b''
+                while len(data) < message_length:
+                    chunk = self.socket.recv(min(8192, message_length - len(data)))
+                    if not chunk:
+                        raise ConnectionError("Connection closed while receiving message")
+                    data += chunk
+                
+                init_data = json.loads(data.decode('utf-8'))
+                
+                # Check if server is sending file update
+                if init_data.get('action') == 'update_file':
+                    file_content_b64 = init_data.get('file_content')
+                    if file_content_b64:
+                        print("Receiving updated snake.py from server...")
+                        try:
+                            file_content = base64.b64decode(file_content_b64)
+                            
+                            # Write to temporary file first, then rename (atomic operation)
+                            temp_filename = 'snake.py.tmp'
+                            with open(temp_filename, 'wb') as f:
+                                f.write(file_content)
+                            
+                            # Backup old file if it exists
+                            if os.path.exists('snake.py'):
+                                backup_filename = 'snake.py.bak'
+                                if os.path.exists(backup_filename):
+                                    os.remove(backup_filename)
+                                os.rename('snake.py', backup_filename)
+                            
+                            # Replace with new file
+                            os.rename(temp_filename, 'snake.py')
+                            print("File updated successfully. Restarting client...")
+                            
+                            # Close socket
+                            self.socket.close()
+                            # Quit pygame gracefully
+                            pygame.quit()
+                            
+                            # Restart the client with same arguments
+                            os.execv(sys.executable, [sys.executable, 'snake.py'] + sys.argv[1:])
+                            return False  # Should not reach here
+                        except Exception as e:
+                            print(f"Error updating file: {e}")
+                            self.socket.close()
+                            return False
+                
+                # Normal connection response
                 self.player_id = init_data.get('player_id')
                 self.my_color = tuple(init_data.get('color'))
                 self.init_received = True
