@@ -3,6 +3,8 @@ import sys
 import socket
 import json
 import threading
+import argparse
+import time
 
 # Initialize Pygame
 pygame.init()
@@ -15,8 +17,8 @@ CELL_NUMBER_X = WINDOW_WIDTH // CELL_SIZE
 CELL_NUMBER_Y = WINDOW_HEIGHT // CELL_SIZE
 
 # Network settings
-SERVER_HOST = 'localhost'
-SERVER_PORT = 5555
+UDP_DISCOVERY_PORT = 5556  # UDP port for server discovery
+DISCOVERY_TIMEOUT = 3.0  # Time to wait for server discovery (seconds)
 
 # Colors
 BLACK = (0, 0, 0)
@@ -30,8 +32,42 @@ clock = pygame.time.Clock()
 font = pygame.font.Font(None, 36)
 small_font = pygame.font.Font(None, 24)
 
+def discover_server(timeout=DISCOVERY_TIMEOUT):
+    """Discover server via UDP broadcast. Returns (host, port) or None if not found."""
+    try:
+        udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        udp_socket.settimeout(timeout)
+        udp_socket.bind(('', UDP_DISCOVERY_PORT))
+        
+        print(f"Discovering servers... (waiting up to {timeout} seconds)")
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            try:
+                data, addr = udp_socket.recvfrom(1024)
+                server_info = json.loads(data.decode('utf-8'))
+                if server_info.get('service') == 'snake-game-server':
+                    # Use the source address from the UDP packet as the server IP
+                    host = addr[0]
+                    port = server_info.get('port')
+                    udp_socket.close()
+                    print(f"Found server at {host}:{port}")
+                    return (host, port)
+            except socket.timeout:
+                continue
+            except json.JSONDecodeError:
+                continue
+        
+        udp_socket.close()
+        print("No server found via UDP discovery")
+        return None
+    except Exception as e:
+        print(f"Error during server discovery: {e}")
+        return None
+
 class GameClient:
-    def __init__(self):
+    def __init__(self, server_host=None, server_port=None):
         self.socket = None
         self.connected = False
         self.player_id = None
@@ -44,14 +80,30 @@ class GameClient:
         }
         self.lock = threading.Lock()
         self.init_received = False
+        self.server_host = server_host
+        self.server_port = server_port
 
     def connect(self, letter):
+        # Determine server address
+        if self.server_host and self.server_port:
+            # Use explicitly specified server
+            server_address = (self.server_host, self.server_port)
+            print(f"Connecting to specified server at {self.server_host}:{self.server_port}")
+        else:
+            # Try to discover server via UDP
+            server_info = discover_server()
+            if server_info:
+                server_address = server_info
+            else:
+                print("Failed to discover server. Please specify --host and --port")
+                return False
+        
         try:
             self.socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            self.socket.connect((SERVER_HOST, SERVER_PORT))
+            self.socket.connect(server_address)
             self.connected = True
             self.selected_letter = letter
-            print(f"Connected to server at {SERVER_HOST}:{SERVER_PORT}")
+            print(f"Connected to server at {server_address[0]}:{server_address[1]}")
             
             # Send letter to server first
             try:
@@ -297,6 +349,20 @@ def draw_letter_selection():
     return selected_letter
 
 def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Snake Game Client')
+    parser.add_argument('--host', type=str, default=None, 
+                        help='Server host address (default: auto-discover via UDP)')
+    parser.add_argument('--port', type=int, default=None, 
+                        help='Server port number (default: auto-discover via UDP)')
+    
+    args = parser.parse_args()
+    
+    # Validate arguments: both host and port must be specified together, or neither
+    if (args.host is None) != (args.port is None):
+        print("Error: --host and --port must be specified together, or both omitted for auto-discovery")
+        sys.exit(1)
+    
     # Show letter selection screen first
     selected_letter = draw_letter_selection()
     if selected_letter is None:
@@ -304,7 +370,7 @@ def main():
         sys.exit()
         return
     
-    client = GameClient()
+    client = GameClient(server_host=args.host, server_port=args.port)
     
     if not client.connect(selected_letter):
         # Show connection error screen

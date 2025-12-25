@@ -12,6 +12,8 @@ This is an **educational project** demonstrating a multiplayer snake game implem
 
 The game supports multiple human players connecting to a central server, each controlling their own snake with a unique color and letter identifier. Players compete to collect food and grow their snakes while avoiding collisions with walls, themselves, and other players.
 
+The server automatically advertises itself via UDP broadcast, allowing clients to discover and connect without needing to know the server's IP address in advance.
+
 ## 2. Game Screenshot
 
 ![Snake Game Screenshot](doc/screenshot.png)
@@ -45,9 +47,26 @@ python snake_server.py --bots 3 --bot-level 7
 python snake_server.py --port 5555 --game-speed 2.0
 ```
 
-### Client
+### Client Options
 
-The client (`snake.py`) does not require any command line arguments. It connects to `localhost:5555` by default.
+The client (`snake.py`) supports the following command line arguments:
+
+- `--host <address>` - Server host address (if not specified, client will auto-discover server via UDP)
+- `--port <number>` - Server port number (must be specified together with --host, or omitted for auto-discovery)
+
+**Note:** If you don't specify `--host` and `--port`, the client will automatically search for servers on the local network using UDP broadcast discovery.
+
+**Examples:**
+```bash
+# Auto-discover server via UDP (recommended for local network)
+python snake.py
+
+# Connect to a specific server
+python snake.py --host localhost --port 5555
+
+# Connect to a server on another machine
+python snake.py --host 192.168.1.100 --port 5555
+```
 
 **Controls:**
 - **Arrow Keys** - Move your snake (UP, DOWN, LEFT, RIGHT)

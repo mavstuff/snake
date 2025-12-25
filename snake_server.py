@@ -9,6 +9,8 @@ import argparse
 CELL_NUMBER_X = 40  # 800 // 20
 CELL_NUMBER_Y = 30  # 600 // 20
 DEFAULT_UPDATE_INTERVAL = 0.30  # 300ms update interval (default, can be adjusted)
+UDP_DISCOVERY_PORT = 5556  # UDP port for server discovery
+UDP_BROADCAST_INTERVAL = 2.0  # Broadcast every 2 seconds
 
 # Available colors for snakes (RGB tuples)
 SNAKE_COLORS = [
@@ -635,6 +637,7 @@ class SnakeServer:
         self.clients = {}  # player_id -> (socket, address)
         self.lock = threading.Lock()
         self.update_interval = update_interval
+        self.udp_socket = None
 
     def handle_client(self, client_socket, address):
         # Receive letter from client first
@@ -734,6 +737,40 @@ class SnakeServer:
                 self.game.update()
             time.sleep(self.update_interval / 2)  # Update more frequently than client requests
 
+    def udp_broadcast_loop(self):
+        """Broadcast server information via UDP"""
+        try:
+            self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            self.udp_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            
+            # Always broadcast to 255.255.255.255 for network discovery
+            broadcast_address = '255.255.255.255'
+            
+            # Client will determine server IP from UDP packet source address
+            # We only need to send the port number
+            server_info = json.dumps({
+                'port': self.port,
+                'service': 'snake-game-server'
+            })
+            
+            while self.running:
+                try:
+                    self.udp_socket.sendto(server_info.encode('utf-8'), (broadcast_address, UDP_DISCOVERY_PORT))
+                    time.sleep(UDP_BROADCAST_INTERVAL)
+                except Exception as e:
+                    if self.running:
+                        print(f"UDP broadcast error: {e}")
+                    break
+        except Exception as e:
+            print(f"Failed to start UDP broadcast: {e}")
+        finally:
+            if self.udp_socket:
+                try:
+                    self.udp_socket.close()
+                except:
+                    pass
+    
     def shutdown(self, server_socket):
         """Clean shutdown of the server"""
         print("\nShutting down server...")
@@ -747,6 +784,13 @@ class SnakeServer:
                 except:
                     pass
             self.clients.clear()
+        
+        # Close UDP socket
+        if self.udp_socket:
+            try:
+                self.udp_socket.close()
+            except:
+                pass
         
         # Close server socket
         try:
@@ -775,6 +819,10 @@ class SnakeServer:
         # Start game loop thread
         game_thread = threading.Thread(target=self.game_loop, daemon=True)
         game_thread.start()
+        
+        # Start UDP broadcast thread
+        udp_thread = threading.Thread(target=self.udp_broadcast_loop, daemon=True)
+        udp_thread.start()
 
         try:
             while self.running:
