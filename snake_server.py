@@ -8,7 +8,7 @@ import argparse
 # Constants
 CELL_NUMBER_X = 40  # 800 // 20
 CELL_NUMBER_Y = 30  # 600 // 20
-UPDATE_INTERVAL = 0.15  # 150ms update interval
+DEFAULT_UPDATE_INTERVAL = 0.30  # 300ms update interval (default, can be adjusted)
 
 # Available colors for snakes (RGB tuples)
 SNAKE_COLORS = [
@@ -344,7 +344,7 @@ class BotAI:
         return None
 
 class MultiPlayerGame:
-    def __init__(self, num_bots=0, bot_level=5):
+    def __init__(self, num_bots=0, bot_level=5, update_interval=DEFAULT_UPDATE_INTERVAL):
         self.players = {}  # player_id -> Player
         self.foods = []  # List of Food objects
         self.last_update_time = time.time()
@@ -356,6 +356,60 @@ class MultiPlayerGame:
         self.bot_index = 0  # Counter for assigning bot numbers 0-9
         self.bots_initialized = False  # Track if bots have been initialized
         self.last_human_alive_time = None  # Timestamp when last human player becomes alive
+        self.update_interval = update_interval
+    
+    def find_valid_start_position(self, occupied):
+        """Find a random valid starting position that doesn't overlap with occupied positions.
+        Returns a tuple (x, y) that is valid for a 3-block snake (head + 2 body parts going left).
+        Ensures all positions are within screen bounds."""
+        max_attempts = 1000
+        for _ in range(max_attempts):
+            # Generate random position, ensuring entire snake body fits within screen bounds
+            # Snake body extends 2 cells to the left, so x must be >= 2
+            # Valid x range: [2, CELL_NUMBER_X - 1] to ensure x - 2 >= 0 and x < CELL_NUMBER_X
+            # Valid y range: [0, CELL_NUMBER_Y - 1] to ensure y is within bounds
+            x = random.randint(2, CELL_NUMBER_X - 1)
+            y = random.randint(0, CELL_NUMBER_Y - 1)
+            
+            # Check if all 3 blocks of the snake body are free and within bounds
+            snake_body_positions = [
+                (x, y),           # head
+                (x - 1, y),       # body part 1
+                (x - 2, y)        # body part 2
+            ]
+            
+            # Verify all positions are within bounds (should always be true, but double-check)
+            all_valid = all(
+                0 <= pos[0] < CELL_NUMBER_X and 0 <= pos[1] < CELL_NUMBER_Y
+                for pos in snake_body_positions
+            )
+            
+            if all_valid and not any(pos in occupied for pos in snake_body_positions):
+                return (x, y)
+        
+        # Fallback: try sequential positions if random search fails
+        for y in range(CELL_NUMBER_Y):
+            for x in range(2, CELL_NUMBER_X):
+                snake_body_positions = [
+                    (x, y),
+                    (x - 1, y),
+                    (x - 2, y)
+                ]
+                # Verify bounds
+                all_valid = all(
+                    0 <= pos[0] < CELL_NUMBER_X and 0 <= pos[1] < CELL_NUMBER_Y
+                    for pos in snake_body_positions
+                )
+                if all_valid and not any(pos in occupied for pos in snake_body_positions):
+                    return (x, y)
+        
+        # Last resort: return a default position (guaranteed to be valid)
+        default_x, default_y = 5, 10
+        # Verify default position is valid
+        if 2 <= default_x < CELL_NUMBER_X and 0 <= default_y < CELL_NUMBER_Y:
+            return (default_x, default_y)
+        # If default is somehow invalid, return minimum valid position
+        return (2, 0)
 
     def add_player(self, letter, is_bot=False):
         """Add a new player and return their ID and color"""
@@ -371,9 +425,7 @@ class MultiPlayerGame:
         for player in self.players.values():
             occupied.extend(player.snake.body)
         
-        start_pos = (5, 5 + player_id * 5)
-        while start_pos in occupied:
-            start_pos = (start_pos[0] + 1, start_pos[1])
+        start_pos = self.find_valid_start_position(occupied)
         
         player = Player(player_id, color, letter, start_pos, is_bot)
         if is_bot:
@@ -430,7 +482,7 @@ class MultiPlayerGame:
         current_time = time.time()
         elapsed = current_time - self.last_update_time
 
-        if elapsed >= UPDATE_INTERVAL:
+        if elapsed >= self.update_interval:
             # Update bot directions
             all_snakes = [p.snake for p in self.players.values() if not p.game_over]
             for player_id, bot_ai in self.bot_ais.items():
@@ -516,9 +568,7 @@ class MultiPlayerGame:
             for p in self.players.values():
                 if p.player_id != player_id:
                     occupied.extend(p.snake.body)
-            start_pos = (5, 5 + player_id * 5)
-            while start_pos in occupied:
-                start_pos = (start_pos[0] + 1, start_pos[1])
+            start_pos = self.find_valid_start_position(occupied)
             self.players[player_id].reset(start_pos)
     
     def reset_all_bots(self):
@@ -529,9 +579,7 @@ class MultiPlayerGame:
                 for p in self.players.values():
                     if p.player_id != player_id:
                         occupied.extend(p.snake.body)
-                start_pos = (5, 5 + player_id * 5)
-                while start_pos in occupied:
-                    start_pos = (start_pos[0] + 1, start_pos[1])
+                start_pos = self.find_valid_start_position(occupied)
                 player.reset(start_pos)
     
     def is_last_human_player(self, player_id):
@@ -554,9 +602,7 @@ class MultiPlayerGame:
             for p in self.players.values():
                 if p.player_id != player_id:
                     occupied.extend(p.snake.body)
-            start_pos = (5, 5 + player_id * 5)
-            while start_pos in occupied:
-                start_pos = (start_pos[0] + 1, start_pos[1])
+            start_pos = self.find_valid_start_position(occupied)
             player.reset(start_pos)
 
     def get_state(self, player_id=None):
@@ -578,13 +624,17 @@ class MultiPlayerGame:
         }
 
 class SnakeServer:
-    def __init__(self, host='0.0.0.0', port=5555, num_bots=0, bot_level=5):
+    def __init__(self, host='0.0.0.0', port=5555, num_bots=0, bot_level=5, game_speed=1.0):
         self.host = host
         self.port = port
-        self.game = MultiPlayerGame(num_bots=num_bots, bot_level=bot_level)
+        # Calculate update interval based on game speed (1.0 = default, 2.0 = 2x slower, 0.5 = 2x faster)
+        # Higher game_speed = slower game = longer interval
+        update_interval = DEFAULT_UPDATE_INTERVAL * game_speed
+        self.game = MultiPlayerGame(num_bots=num_bots, bot_level=bot_level, update_interval=update_interval)
         self.running = True
         self.clients = {}  # player_id -> (socket, address)
         self.lock = threading.Lock()
+        self.update_interval = update_interval
 
     def handle_client(self, client_socket, address):
         # Receive letter from client first
@@ -682,7 +732,7 @@ class SnakeServer:
         while self.running:
             with self.lock:
                 self.game.update()
-            time.sleep(UPDATE_INTERVAL / 2)  # Update more frequently than client requests
+            time.sleep(self.update_interval / 2)  # Update more frequently than client requests
 
     def shutdown(self, server_socket):
         """Clean shutdown of the server"""
@@ -752,8 +802,10 @@ if __name__ == "__main__":
                         metavar='[0-9]', help='Bot difficulty level 0-9 (0=most random, 9=direct to food, default: 5)')
     parser.add_argument('--host', type=str, default='0.0.0.0', help='Server host (default: 0.0.0.0 - all interfaces)')
     parser.add_argument('--port', type=int, default=5555, help='Server port (default: 5555)')
+    parser.add_argument('--game-speed', type=float, default=1.0, 
+                        help='Game speed multiplier (1.0=default/0.5x of old, 2.0=2x slower, 0.5=2x faster, default: 1.0)')
     
     args = parser.parse_args()
     
-    server = SnakeServer(host=args.host, port=args.port, num_bots=args.bots, bot_level=args.bot_level)
+    server = SnakeServer(host=args.host, port=args.port, num_bots=args.bots, bot_level=args.bot_level, game_speed=args.game_speed)
     server.start()
