@@ -79,7 +79,7 @@ python snake.py --host 192.168.1.100 --port 5555
 ### Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/mavstuff/snake.git
 cd snake
 ```
 
